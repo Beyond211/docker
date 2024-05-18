@@ -207,10 +207,10 @@ def confirm_save_email(update: Update, context):
 
 def findPhoneNumbersCommand(update: Update, context):
     update.message.reply_text('Введите текст для поиска телефонных номеров: ')
-    return 'findPhoneNumbers'
+    return 'find_phone_number'
 
 
-def findPhoneNumbers(update: Update, context):
+def find_phone_number(update: Update, context):
     user_input = update.message.text
 
     phoneNumRegex = re.compile(r'\+?[78][- ]?(?:\(\d{3}\)|\d{3})[- ]?\d{3}[- ]?\d{2}[- ]?\d{2}')
@@ -494,20 +494,20 @@ def FindService(update: Update, context):
 def get_services(update: Update, context):
     update.message.reply_text('Сбор информации о запущенных процессах.')
     
-    result = ssh_connect(update, "systemctl list-units --type=service --all")
+    result = ssh_connect(update, "systemctl list-units --type=service --state=running")
     if result:
-        result_lines = result.split('n')
+        result_lines = result.split('\n')
         chunk = ''
         for line in result_lines:
             if len(chunk + line) <= 4000:  # Ограничение по размеру сообщения
-                chunk += line + 'n'
+                chunk += line + '\n'
             else:
                 update.message.reply_text(chunk)
-                chunk = line + 'n'
+                chunk = line + '\n'
         # Отправляем оставшийся кусочек
         if chunk:
             update.message.reply_text(chunk)
-            
+    
     return ConversationHandler.END
 
 def main():
@@ -518,7 +518,7 @@ def main():
     convHandlerFindPhoneNumbers = ConversationHandler(
         entry_points=[CommandHandler('find_phone_number', findPhoneNumbersCommand)],
         states={
-            'find_phone_number': [MessageHandler(Filters.text & ~Filters.command, findPhoneNumbers)],
+            'find_phone_number': [MessageHandler(Filters.text & ~Filters.command, find_phone_number)],
             'confirm_save_number': [MessageHandler(Filters.text & ~Filters.command, confirm_save_number)]
         },
         fallbacks=[]
