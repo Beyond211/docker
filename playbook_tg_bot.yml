@@ -1,0 +1,166 @@
+- name: Installing PostgreSQL and setting password for postgres user
+  hosts: databases
+  become: yes
+  gather_facts: yes
+  vars:
+    POSTGRES_VERSION: 14
+    DB_PORT: 5432
+  tasks:
+    - name: Installing PostgreSQL
+      apt:
+        name:
+          - postgresql-{{ POSTGRES_VERSION }}
+          - postgresql-contrib-{{ POSTGRES_VERSION }}
+          - libpq-dev
+          - python3-psycopg2
+    
+    - name: create new user
+      command: psql -c "ALTER ROLE postgres PASSWORD 'postgres';"
+      become: true
+      become_user: postgres    
+
+
+    - name: Create PostgreSQL user with replication
+      become: yes
+      become_user: postgres
+      postgresql_user:
+        name: repl_user
+        password: repl_user
+        role_attr_flags: REPLICATION
+        state: present
+
+    - name: Create database
+      become: yes
+      become_user: postgres
+      postgresql_db:
+        name: db_bot
+        state: present
+
+    - name: Create tables and insert data
+      become: yes
+      become_user: postgres
+      postgresql_query:
+        db: db_bot
+        query:
+          - "CREATE TABLE IF NOT EXISTS email (id SERIAL PRIMARY KEY, email VARCHAR (255) NOT NULL);"
+          - "CREATE TABLE IF NOT EXISTS phone_numbers (id SERIAL PRIMARY KEY, phone_numbers VARCHAR(20) NOT NULL);"
+    
+    - name: Copying pg_hba.conf
+      template:
+        src: pg_hba.conf
+        dest: /etc/postgresql/{{ POSTGRES_VERSION }}/main/pg_hba.conf
+    
+
+    - name: replication
+      blockinfile:
+        path: "/etc/postgresql/{{ POSTGRES_VERSION }}/main/postgresql.conf"
+        block: |
+          listen_addresses = '*'
+          port = {{ DB_PORT }}
+          archive_mode = on
+          archive_command = 'cp %p /oracle/pg_data/archive/%f'
+          max_wal_senders=10
+          wal_level=replica
+          wal_log_hints = on
+          hot_standby=on
+          max_replication_slots=10
+          hot_standby_feedback=on
+          log_replication_commands=on
+    - name: Restarting PostgreSQL
+      service:
+        name: postgresql
+        state: restarted
+
+#========bd repl================
+- name: Slave Init
+  hosts: databases2
+  become: yes
+  vars_files:
+    - vars.yml
+  tasks:
+    - name: Installing PostgreSQL
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - libpq-dev
+          - python3-psycopg2
+    - name: Set User Access Configuration
+      postgresql_pg_hba:
+        dest: "/etc/postgresql/14/main/pg_hba.conf"
+        contype: host
+        databases: replication
+        method: trust
+        users: all
+        address: 192.168.0.0/16
+        create: true
+      become_user: postgres
+    - name: Set Database Configuration
+      blockinfile:
+        path: /etc/postgresql/14/main/postgresql.conf
+        owner: postgres
+        block: |
+          listen_addresses = '*'
+          port = {{ DB_REPL_PORT }}
+      become: yes
+    - name: Restart PostgreSQL
+      service:
+        name: postgresql
+        state: restarted
+      become: yes
+    - name: Deleting Databases
+      command: rm -rf /var/lib/postgresql/14/main/
+      become: yes
+      become_user: postgres
+    - name: Performing Replication
+      command: pg_basebackup -h {{ DB_HOST }} -D /var/lib/postgresql/14/main/ -p {{ DB_PORT }} -U {{ DB_REPL_USER }} -vP -w
+      become: yes
+      become_user: postgres
+      environment:
+        PGPASSWORD: "{{ DB_REPL_PASSWORD }}"
+    - name: Set privileges
+      command: chown -R postgres:postgres /var/lib/postgresql/
+      become: yes
+      become_user: postgres
+      
+#========================BOT================================================== 
+- name: Improved setup for bot deployment
+  hosts: tg_bot
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: "Installing Python and dependencies"
+      apt:
+        name:
+          - python3.10-dev
+          - libpq-dev
+          - git
+          - python3-pip
+        state: present  # Добавлен параметр state для указания, что пакеты должны быть установлены
+
+    - name: Creating directory for bot
+      file:
+        path: /home/ubuntu/new_bot
+        state: directory
+
+    - name: Cloning repository and setting up bot files
+      block:
+        - name: "Git clone"
+          git:
+            repo: https://github.com/Beyond211/Bot2.0.git
+            dest: /home/ubuntu/new_bot
+            force: yes 
+          register: clone_result
+
+        - name: "Installing bot requirements"
+          pip:
+            requirements: /home/ubuntu/new_bot/requirements.txt
+
+    - name: Копировать файл
+      copy:
+        src: ".env"  # Имя файла, который нужно скопировать
+        dest: "/home/ubuntu/new_bot/.env"  # Путь к каталогу, куда нужно скопировать файл
+
+    - name: Running the bot
+      shell: "python3 /home/ubuntu/new_bot/bot.py &"
